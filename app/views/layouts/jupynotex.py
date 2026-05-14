@@ -10,7 +10,6 @@ with comma, ranges with dash (with defaults to start and end.
 
 import base64
 import json
-import os
 import re
 import subprocess
 import sys
@@ -50,47 +49,170 @@ FORMAT_OK = (
 # a little mark to put in the continuation line(s) when text is wrapped
 WRAP_MARK = "↳"
 
+MARKDOWN_LINE_END = "  "  # force explicit line breaks in rendered markdown
 
-"""
-"""
+TEXT_REPLACEMENTS = {
+    "\u00a0": " ",
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2026": "...",
+}
+
+# Replace special characters commonly used in jupyter notebooks which previously tripped up conversion.
+
+MATH_SYMBOLS = {
+    "α": r"\alpha",
+    "β": r"\beta",
+    "γ": r"\gamma",
+    "δ": r"\delta",
+    "ε": r"\epsilon",
+    "ϵ": r"\epsilon",
+    "θ": r"\theta",
+    "λ": r"\lambda",
+    "μ": r"\mu",
+    "π": r"\pi",
+    "ρ": r"\rho",
+    "σ": r"\sigma",
+    "τ": r"\tau",
+    "φ": r"\phi",
+    "ω": r"\omega",
+    "Δ": r"\Delta",
+    "Σ": r"\Sigma",
+    "≤": r"\leq",
+    "≥": r"\geq",
+    "≠": r"\neq",
+    "≈": r"\approx",
+    "±": r"\pm",
+    "×": r"\times",
+    "÷": r"\div",
+    "∞": r"\infty",
+    "∑": r"\sum",
+    "∏": r"\prod",
+    "∫": r"\int",
+    "√": r"\sqrt{}",
+    "∂": r"\partial",
+    "∇": r"\nabla",
+    "∈": r"\in",
+    "∉": r"\notin",
+    "∀": r"\forall",
+    "∃": r"\exists",
+    "∧": r"\land",
+    "∨": r"\lor",
+    "¬": r"\neg",
+    "→": r"\to",
+    "←": r"\leftarrow",
+    "↔": r"\leftrightarrow",
+    "⇒": r"\Rightarrow",
+    "⇔": r"\Leftrightarrow",
+    "∪": r"\cup",
+    "∩": r"\cap",
+    "⊂": r"\subset",
+    "⊆": r"\subseteq",
+    "⊃": r"\supset",
+    "⊇": r"\supseteq",
+    "∅": r"\emptyset",
+}
 
 
 def _sanitize_markdown_text(text):
     """
     - Remove characters that are unsafe in markdown cells.
-    - Non-breaking space → normal space.
-    - Smart quotes → ASCII apostrophe
-    - Curly quotes → ASCII quotes.
-    - En dash / em dash → ASCII hyphen.
-    - Ellipsis character → three dots.
-
     """
-    TEXT_REPLACEMENTS = {
-        "\u00a0": " ",
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2026": "...",
-    }
 
     for old, new in TEXT_REPLACEMENTS.items():
         text = text.replace(old, new)
 
-    text = unicodedata.normalize("NFKD", text)
-    return "".join(char for char in text if char in "\t\n\r" or 32 <= ord(char) <= 126)
+    text = unicodedata.normalize("NFKC", text)
+    return "".join(
+        char
+        for char in text
+        if char in "\t\n\r" or unicodedata.category(char)[0] != "C"
+    )
+
+
+def _split_math_spans(text):
+    """Split text into normal and inline-math spans."""
+    spans = []
+    pos = 0
+
+    while pos < len(text):
+        start = pos
+        while start < len(text):
+            if text[start] == "$" and (start == 0 or text[start - 1] != "\\"):
+                break
+            start += 1
+
+        if start >= len(text):
+            spans.append((False, text[pos:]))
+            break
+
+        delimiter = "$$" if text[start : start + 2] == "$$" else "$"
+        end = start + len(delimiter)
+        while end < len(text):
+            if text.startswith(delimiter, end) and text[end - 1] != "\\":
+                break
+            end += 1
+
+        if end >= len(text):
+            spans.append((False, text[pos:]))
+            break
+
+        spans.append((False, text[pos:start]))
+        spans.append((True, text[start : end + len(delimiter)]))
+        pos = end + len(delimiter)
+
+    return spans
+
+
+def _replace_math_symbols(text, in_math=False):
+    result = []
+    for char in text:
+        if char in MATH_SYMBOLS:
+            result.append(MATH_SYMBOLS[char] if in_math else f"${MATH_SYMBOLS[char]}$")
+        else:
+            result.append(char)
+
+    return "".join(result)
+
+
+def _process_math_span(span):
+    delimiter = "$$" if span.startswith("$$") and span.endswith("$$") else "$"
+    return (
+        delimiter
+        + _replace_math_symbols(span[len(delimiter) : -len(delimiter)], in_math=True)
+        + delimiter
+    )
+
+
+def _process_markdown_text(text):
+    """Convert Unicode math symbols while preserving markdown formatting."""
+    code_spans = []
+
+    def stash_code_span(match):
+        code_spans.append(match.group(0))
+        return f"\x00CODE{len(code_spans) - 1}\x00"
+
+    text = re.sub(r"`(.+?)`", stash_code_span, text)
+    text = _replace_math_symbols(text)
+
+    for idx, code_span in enumerate(code_spans):
+        text = text.replace(f"\x00CODE{idx}\x00", code_span)
+
+    return text
 
 
 def _process_markdown_line(line):
     """Prepare a notebook markdown line for the LaTeX markdown package."""
 
-    MARKDOWN_LINE_END = "  "  # force explicit line breaks in rendered markdown
-    MARKDOWN_SPECIAL_CHARS = "*_`~"
-
     line = _sanitize_markdown_text(line).replace("```markdown", "```md").strip()
-    line = line.translate(str.maketrans("", "", MARKDOWN_SPECIAL_CHARS))
+    line = "".join(
+        _process_math_span(span) if is_math else _process_markdown_text(span)
+        for is_math, span in _split_math_spans(line)
+    )
 
     return line + MARKDOWN_LINE_END
 
