@@ -4,8 +4,8 @@
 
 """USAGE: jupynote.py notebook.ipynb cells
 
-    cells is a string with which cells to include, separate groups
-    with comma, ranges with dash (with defaults to start and end.
+cells is a string with which cells to include, separate groups
+with comma, ranges with dash (with defaults to start and end.
 """
 
 import base64
@@ -17,19 +17,26 @@ import sys
 import tempfile
 import textwrap
 import traceback
-
+import unicodedata
 
 # basic verbatim start/end
-VERBATIM_BEGIN = [r"\begin{minted}[fontsize=\footnotesize,breaklines,breakanywhere,tabsize=4]{md}"]
+VERBATIM_BEGIN = [
+    r"\begin{minted}[fontsize=\footnotesize,breaklines,breakanywhere,tabsize=4]{md}"
+]
 VERBATIM_END = [r"\end{minted}"]
 
 # markdown start/end
 MARKDOWN_BEGIN = [r"\begin{markdown}"]
-MARKDOWN_END = [r"\end{markdown}"+"\n"]
+MARKDOWN_END = [r"\end{markdown}" + "\n"]
 
 # highlighers for different languages (block beginning and ending)
 HIGHLIGHTERS = {
-    'python': ([r'\begin{minted}[fontsize=\footnotesize,breaklines,breakanywhere,tabsize=4]{python}'], [r'\end{minted}']),
+    "python": (
+        [
+            r"\begin{minted}[fontsize=\footnotesize,breaklines,breakanywhere,tabsize=4]{python}"
+        ],
+        [r"\end{minted}"],
+    ),
     None: (VERBATIM_BEGIN, VERBATIM_END),
 }
 
@@ -37,10 +44,56 @@ HIGHLIGHTERS = {
 FORMAT_ERROR = r"enhanced,breakable=unlimited,colback=red!5!white,colframe=red!75!"
 FORMAT_OK = (
     r"enhanced,breakable=unlimited,coltitle=red!75!black, colbacktitle=black!10!white, "
-    r"halign title=right, fonttitle=\sffamily\mdseries\scshape\footnotesize")
+    r"halign title=right, fonttitle=\sffamily\mdseries\scshape\footnotesize"
+)
 
 # a little mark to put in the continuation line(s) when text is wrapped
 WRAP_MARK = "↳"
+
+
+"""
+"""
+
+
+def _sanitize_markdown_text(text):
+    """
+    - Remove characters that are unsafe in markdown cells.
+    - Non-breaking space → normal space.
+    - Smart quotes → ASCII apostrophe
+    - Curly quotes → ASCII quotes.
+    - En dash / em dash → ASCII hyphen.
+    - Ellipsis character → three dots.
+
+    """
+    TEXT_REPLACEMENTS = {
+        "\u00a0": " ",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+    }
+
+    for old, new in TEXT_REPLACEMENTS.items():
+        text = text.replace(old, new)
+
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in text if char in "\t\n\r" or 32 <= ord(char) <= 126)
+
+
+def _process_markdown_line(line):
+    """Prepare a notebook markdown line for the LaTeX markdown package."""
+
+    MARKDOWN_LINE_END = "  "  # force explicit line breaks in rendered markdown
+    MARKDOWN_SPECIAL_CHARS = "*_`~"
+
+    line = _sanitize_markdown_text(line).replace("```markdown", "```md").strip()
+    line = line.translate(str.maketrans("", "", MARKDOWN_SPECIAL_CHARS))
+
+    return line + MARKDOWN_LINE_END
+
 
 # the options available for command line
 CMDLINE_OPTION_NAMES = [
@@ -98,7 +151,7 @@ class ItemProcessor:
     def get_item_data(self, item):
         """Extract item information using different processors."""
 
-        data = item['data']
+        data = item["data"]
         for mimetype, *functions in self.PROCESSORS:
             if mimetype in data:
                 content = data[mimetype]
@@ -117,27 +170,34 @@ class ItemProcessor:
 
     def process_png(self, image_data):
         """Process a PNG: just save the received b64encoded data to a temp file."""
-        _, fname = tempfile.mkstemp(suffix='.png')
-        with open(fname, 'wb') as fh:
+        _, fname = tempfile.mkstemp(suffix=".png")
+        with open(fname, "wb") as fh:
             fh.write(base64.b64decode(image_data))
         return fname
 
     def process_svg(self, image_data):
         """Process a SVG: save the data, transform to PDF, and then use that."""
-        _, svg_fname = tempfile.mkstemp(suffix='.svg')
-        _, pdf_fname = tempfile.mkstemp(suffix='.pdf')
-        raw_svg = ''.join(image_data).encode('utf8')
-        with open(svg_fname, 'wb') as fh:
+        _, svg_fname = tempfile.mkstemp(suffix=".svg")
+        _, pdf_fname = tempfile.mkstemp(suffix=".pdf")
+        raw_svg = "".join(image_data).encode("utf8")
+        with open(svg_fname, "wb") as fh:
             fh.write(raw_svg)
 
-        cmd = ['rsvg-convert', '--format=pdf', '--output={}'.format(pdf_fname), svg_fname]
+        cmd = [
+            "rsvg-convert",
+            "--format=pdf",
+            "--output={}".format(pdf_fname),
+            svg_fname,
+        ]
         subprocess.run(cmd)
 
         return pdf_fname
 
     def include_graphics(self, fname):
         """Wrap a filename in an includegraphics structure."""
-        fname_no_backslashes = fname.replace("\\", "/")  # do not leave backslashes in Windows
+        fname_no_backslashes = fname.replace(
+            "\\", "/"
+        )  # do not leave backslashes in Windows
         width = self.cell_options.get("output-image-size", r"1\textwidth")
         return r"\includegraphics[width={}]{{{}}}".format(width, fname_no_backslashes)
 
@@ -148,10 +208,10 @@ class ItemProcessor:
     # mimetype and list of functions to apply; order is important here as we want to
     # prioritize getting some mimetypes over others when multiple are present
     PROCESSORS = [
-        ('text/latex',),
-        ('image/svg+xml', process_svg, include_graphics, listwrap),
-        ('image/png', process_png, include_graphics, listwrap),
-        ('text/plain', process_plain_text),
+        ("text/latex",),
+        ("image/svg+xml", process_svg, include_graphics, listwrap),
+        ("image/png", process_png, include_graphics, listwrap),
+        ("text/plain", process_plain_text),
     ]
 
 
@@ -166,15 +226,15 @@ class Notebook:
         self.config_options = self._validate_config(config_options)
         self.cell_options = {}
 
-        with open(path, 'rt', encoding='utf8') as fh:
+        with open(path, "rt", encoding="utf8") as fh:
             nb_data = json.load(fh)
 
         # get the languaje, to highlight
-        lang = nb_data['metadata']['language_info']['name']
+        lang = nb_data["metadata"]["language_info"]["name"]
         self._highlight_delimiters = HIGHLIGHTERS.get(lang, HIGHLIGHTERS[None])
 
         # get all cells
-        self._cells = [x for x in nb_data['cells']]
+        self._cells = [x for x in nb_data["cells"]]
 
     def _validate_config(self, config):
         """Validate received configuration."""
@@ -186,52 +246,72 @@ class Notebook:
 
     def _proc_src(self, content):
         """Process the source of a cell."""
-        source = content['source']
+        source = content["source"]
         result = []
-        if content['cell_type'] == 'code':
+        if content["cell_type"] == "code":
             begin, end = self._highlight_delimiters
             result.extend(begin)
-            result.extend(textwrap.fill(line[:1000] + ' [The rest of this line has been truncated by the system to improve readability.] ' * (len(line) > 1000), width=90, subsequent_indent='    ') for line in source)
+            result.extend(
+                textwrap.fill(
+                    line[:1000]
+                    + " [The rest of this line has been truncated by the system to improve readability.] "
+                    * (len(line) > 1000),
+                    width=90,
+                    subsequent_indent="    ",
+                )
+                for line in source
+            )
             result.extend(end)
-        elif content['cell_type'] == 'markdown':
+        elif content["cell_type"] == "markdown":
             result.extend(MARKDOWN_BEGIN)
-            result.extend(line.replace('```markdown', '```md').strip() for line in source)
+            result.extend(_process_markdown_line(line) for line in source)
             result.extend(MARKDOWN_END)
-        elif content['cell_type'] == 'raw':
+        elif content["cell_type"] == "raw":
             result.extend(VERBATIM_BEGIN)
-            result.extend(textwrap.fill(line[:1000] + ' [The rest of this line has been truncated by the system to improve readability.] ' * (len(line) > 1000), width=90, subsequent_indent='    ') for line in source)
+            result.extend(
+                textwrap.fill(
+                    line[:1000]
+                    + " [The rest of this line has been truncated by the system to improve readability.] "
+                    * (len(line) > 1000),
+                    width=90,
+                    subsequent_indent="    ",
+                )
+                for line in source
+            )
             result.extend(VERBATIM_END)
         else:
             raise ValueError(
                 "Cell type not supported when processing source: {!r}".format(
-                    content['cell_type']))
+                    content["cell_type"]
+                )
+            )
 
-        return '\n'.join(result)
+        return "\n".join(result)
 
     def _proc_out(self, content):
         """Process the output of a cell."""
-        outputs = content.get('outputs')
+        outputs = content.get("outputs")
         if not outputs:
             return
 
         result = []
         processor = ItemProcessor(self.cell_options, self.config_options)
         for item in outputs:
-            output_type = item['output_type']
-            if output_type in ('execute_result', 'display_data'):
+            output_type = item["output_type"]
+            if output_type in ("execute_result", "display_data"):
                 more_content = processor.get_item_data(item)
-            elif output_type == 'stream':
+            elif output_type == "stream":
                 more_content = processor.process_plain_text(item["text"])
                 if len(more_content) > 120:
                     more_content = more_content[:100] + ["..."] + more_content[-20:]
-            elif output_type == 'error':
-                raw_traceback = item['traceback']
+            elif output_type == "error":
+                raw_traceback = item["traceback"]
                 tback_lines = []
                 for raw_line in raw_traceback:
-                    internal_lines = raw_line.split('\n')
+                    internal_lines = raw_line.split("\n")
                     for line in internal_lines:
                         line = re.sub(r"\x1b\[\d.*?m", "", line)  # sanitize
-                        if set(line) == {'-'}:
+                        if set(line) == {"-"}:
                             # ignore separator, as our graphical box already has one
                             continue
                         tback_lines.append(line)
@@ -240,7 +320,7 @@ class Notebook:
                 raise ValueError("Output type not supported in item {!r}".format(item))
             result.extend(more_content)
 
-        return '\n'.join(result)
+        return "\n".join(result)
 
     def get(self, cell_idx):
         """Return the content from a specific cell in the notebook.
@@ -250,7 +330,7 @@ class Notebook:
         content = self._cells[cell_idx - 1]
         source = self._proc_src(content)
         output = self._proc_out(content)
-        return source, output, content['cell_type'] == 'markdown'
+        return source, output, content["cell_type"] == "markdown"
 
     def parse_cells(self, spec):
         """Convert the cells spec to a range of ints."""
@@ -261,25 +341,29 @@ class Notebook:
 
         cells = set()
         options = {}
-        groups = [x.strip() for x in spec.split(',')]
-        valid_chars = set('0123456789-,')
+        groups = [x.strip() for x in spec.split(",")]
+        valid_chars = set("0123456789-,")
         for group in groups:
-            if '=' in group:
+            if "=" in group:
                 k, v = group.split("=", maxsplit=1)
                 options[k] = v
                 continue
 
             if set(group) - valid_chars:
                 raise ValueError(
-                    "Found forbidden characters in cells definition (allowed digits, '-' and ',')")
+                    "Found forbidden characters in cells definition (allowed digits, '-' and ',')"
+                )
 
-            if '-' in group:
-                cfrom, cto = group.split('-')
-                cfrom = 1 if cfrom == '' else int(cfrom)
-                cto = maxlen if cto == '' else int(cto)
+            if "-" in group:
+                cfrom, cto = group.split("-")
+                cfrom = 1 if cfrom == "" else int(cfrom)
+                cto = maxlen if cto == "" else int(cto)
                 if cfrom > cto:
                     raise ValueError(
-                        "Range 'from' needs to be equal to or smaller than 'to' (got {!r})".format(group))
+                        "Range 'from' needs to be equal to or smaller than 'to' (got {!r})".format(
+                            group
+                        )
+                    )
                 cells.update(range(cfrom, cto + 1))
             else:
                 cells.add(int(group))
@@ -289,7 +373,8 @@ class Notebook:
             raise ValueError("Cells need to be >=1")
         if maxlen < cells[-1]:
             raise ValueError(
-                f"Notebook loaded of len {maxlen}, smaller than requested cells: {cells}")
+                f"Notebook loaded of len {maxlen}, smaller than requested cells: {cells}"
+            )
 
         self.cell_options = options
         return cells
@@ -307,22 +392,26 @@ def main(notebook_path, cells_spec, config_options):
             title = "ERROR when parsing cell {}".format(cell)
             print(r"\begin{{tcolorbox}}[{}, title={{{}}}]".format(FORMAT_ERROR, title))
             tb = traceback.format_exc()
-            _parts = _process_plain_text(tb.split('\n'))
-            print('\n'.join(_parts))
+            _parts = _process_plain_text(tb.split("\n"))
+            print("\n".join(_parts))
             print(r"\end{tcolorbox}")
             continue
 
         if not md:
-          print(r"\begin{{tcolorbox}}[{}, title=Cell {{{:02d}}}]".format(FORMAT_OK, cell))
+            print(
+                r"\begin{{tcolorbox}}[{}, title=Cell {{{:02d}}}]".format(
+                    FORMAT_OK, cell
+                )
+            )
 
         print(src)
 
         if out:
             if not md:
-              print(r"\tcblower")
+                print(r"\tcblower")
             print(out)
         if not md:
-          print(r"\end{tcolorbox}")
+            print(r"\end{tcolorbox}")
 
 
 if __name__ == "__main__":
