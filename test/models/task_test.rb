@@ -424,6 +424,60 @@ class TaskTest < ActiveSupport::TestCase
     unit.destroy!
   end
 
+  def test_ipynb_markdown_lists_formatting_and_math_to_pdf
+    unit = FactoryBot.create(:unit, student_count: 1, task_count: 0)
+    td = TaskDefinition.new({
+        unit_id: unit.id,
+        tutorial_stream: unit.tutorial_streams.first,
+        name: 'Task with markdown notebook',
+        description: 'Code task',
+        weighting: 4,
+        target_grade: 0,
+        start_date: unit.start_date + 1.week,
+        target_date: unit.start_date + 2.weeks,
+        abbreviation: 'TaskPdfWithMarkdownIpynb',
+        restrict_status_updates: false,
+        upload_requirements: [ { "key" => 'file0', "name" => 'A notebook', "type" => 'code' } ],
+        plagiarism_warn_pct: 0.8,
+        is_graded: false,
+        max_quality_pts: 0
+      })
+    td.save!
+
+    data_to_post = with_file(
+      'test_files/submissions/markdown_list_math.ipynb',
+      'application/json',
+      { trigger: 'ready_for_feedback' }
+    )
+
+    project = unit.active_projects.first
+
+    add_auth_header_for user: unit.main_convenor_user
+
+    post "/api/projects/#{project.id}/task_def_id/#{td.id}/submission", data_to_post
+
+    assert_equal 201, last_response.status, last_response_body
+
+    task = project.task_for_task_definition(td)
+    assert task.convert_submission_to_pdf(log_to_stdout: true)
+    assert File.exist? task.final_pdf_path
+
+    reader = PDF::Reader.new(task.final_pdf_path)
+    text = reader.pages.map(&:text).join("\n")
+
+    assert_includes text, 'Observations from the plot:'
+    assert_includes text, 'Linear decay'
+    assert_includes text, 'Model availability'
+    assert_includes text, 'Conclusion:'
+    assert_not_includes text, 'ERROR when parsing'
+    assert_not_includes text, 'textbf'
+
+    path = task.zip_file_path_for_done_task
+    td.destroy
+    assert_not File.exist? path
+    unit.destroy!
+  end
+
   def test_code_submission_with_long_lines
     unit = FactoryBot.create(:unit, student_count: 1, task_count: 0)
     td = TaskDefinition.new({
