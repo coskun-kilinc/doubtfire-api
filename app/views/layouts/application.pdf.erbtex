@@ -119,6 +119,7 @@ end
 \definecolor{fail}{rgb}{0.851, 0.216, 0.075}
 \definecolor{timeexceeded}{rgb}{0.851, 0.216, 0.075}
 \definecolor{assessinportfolio}{rgb}{0.568, 0.721, 0.568}
+\definecolor{attentionrequired}{rgb}{0.945, 0.505, 0.302}
 
 \begin{document}
 
